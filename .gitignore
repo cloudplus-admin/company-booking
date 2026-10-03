@@ -1,0 +1,4 @@
+booking.db
+booking.db-*
+server.log
+__pycache__/

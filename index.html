@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Бронь компаний</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #f4f5f7; color: #1d2330; }
+  header { background: #1d2330; color: #fff; padding: 14px 20px; font-size: 18px; }
+  main { max-width: 860px; margin: 20px auto; padding: 0 16px; }
+  .card { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  input { padding: 9px 10px; border: 1px solid #c9ced8; border-radius: 6px; font-size: 15px; }
+  button { padding: 9px 14px; border: 0; border-radius: 6px; background: #2b6cb0; color: #fff; font-size: 14px; cursor: pointer; }
+  button.secondary { background: #718096; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #e6e9ef; font-size: 14px; }
+  .free { color: #2f855a; font-weight: 600; }
+  .busy { color: #b7791f; }
+  .msg { min-height: 20px; margin-top: 8px; font-size: 14px; }
+  .msg.err { color: #c53030; }
+  .hint { font-size: 13px; color: #718096; }
+</style>
+</head>
+<body>
+<header>Бронь компаний в работу</header>
+<main>
+  <div class="card">
+    <div class="row">
+      <input id="manager" placeholder="Ваше имя" size="24">
+      <span class="hint">Имя запоминается в этом браузере</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>Добавить компанию</b>
+    <div class="row" style="margin-top:8px">
+      <input id="newName" placeholder="Название" size="32">
+      <input id="newInn" placeholder="ИНН (необязательно)" size="18">
+      <button id="addBtn">Добавить</button>
+    </div>
+    <div id="addMsg" class="msg"></div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:8px">
+      <input id="search" placeholder="Поиск по названию или ИНН" size="40">
+    </div>
+    <table>
+      <thead><tr><th>Компания</th><th>ИНН</th><th>Статус</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="listMsg" class="msg"></div>
+  </div>
+</main>
+<script>
+const managerInput = document.getElementById('manager');
+const listMsg = document.getElementById('listMsg');
+const addMsg = document.getElementById('addMsg');
+let companies = [];
+
+managerInput.value = localStorage.getItem('bookingManager') || '';
+managerInput.addEventListener('change', () => localStorage.setItem('bookingManager', managerInput.value.trim()));
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+}
+
+async function api(url, body) {
+  const opts = body === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)};
+  const res = await fetch(url, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Ошибка сервера');
+  return data;
+}
+
+function showError(el, text) {
+  el.textContent = text;
+  el.className = 'msg err';
+}
+
+function render() {
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  const me = managerInput.value.trim();
+  const list = companies.filter(c => !q || c.name.toLowerCase().includes(q) || (c.inn || '').includes(q));
+  document.getElementById('rows').innerHTML = list.map(c => {
+    const busy = c.booked_by;
+    const status = busy ? '<span class="busy">В работе: ' + esc(busy) + '</span>' : '<span class="free">Свободна</span>';
+    let action = '';
+    if (!busy) action = '<button data-act="book" data-id="' + c.id + '">Взять в работу</button>';
+    else if (busy === me) action = '<button class="secondary" data-act="release" data-id="' + c.id + '">Освободить</button>';
+    return '<tr><td>' + esc(c.name) + '</td><td>' + esc(c.inn) + '</td><td>' + status + '</td><td>' + action + '</td></tr>';
+  }).join('') || '<tr><td colspan="4">Компаний пока нет</td></tr>';
+}
+
+async function load() {
+  try {
+    companies = await api('/api/companies');
+    listMsg.textContent = '';
+    listMsg.className = 'msg';
+    render();
+  } catch (e) {
+    showError(listMsg, e.message);
+  }
+}
+
+document.getElementById('rows').addEventListener('click', async e => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const manager = managerInput.value.trim();
+  if (!manager) { showError(listMsg, 'Сначала укажите ваше имя вверху.'); return; }
+  localStorage.setItem('bookingManager', manager);
+  btn.disabled = true;
+  try {
+    await api('/api/companies/' + btn.dataset.id + '/' + btn.dataset.act, {manager});
+  } catch (err) {
+    showError(listMsg, err.message);
+  }
+  await load();
+});
+
+document.getElementById('addBtn').addEventListener('click', async () => {
+  try {
+    await api('/api/companies', {name: document.getElementById('newName').value, inn: document.getElementById('newInn').value});
+    document.getElementById('newName').value = '';
+    document.getElementById('newInn').value = '';
+    addMsg.textContent = 'Компания добавлена';
+    addMsg.className = 'msg';
+    await load();
+  } catch (err) {
+    showError(addMsg, err.message);
+  }
+});
+
+document.getElementById('search').addEventListener('input', render);
+load();
+</script>
+</body>
+</html>
